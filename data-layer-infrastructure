@@ -1,0 +1,326 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Parent stack for fmp-eft data layer
+
+Parameters:
+  DevOpsBucketName:
+    Type: String
+    Description: Name of S3 bucket used for storing CloudFormation assets
+  EnvName:
+    Type: String
+    Description: The environment name (dev, test, preprod, or prod)
+    AllowedValues: [dev, test, preprod, prod]
+  # CommitHash:
+  #   Type: String
+  #   Description: Git commit hash for determining asset file paths
+  # LambdaExecRole:
+  #   Type: String
+  #   Description: Role permission for Monitor execution
+  #   Default: !Sub arn:aws-us-gov:iam::${AWS::AccountId}:role/project/project-fmp-eft-s3-event-monitor-exec-role-${EnvName}
+  # StepFuncExecRole:
+  #   Type: String
+  #   Description: Role permission for Stepfunction execution
+  #   Default: !Sub arn:aws-us-gov:iam::${AWS::AccountId}:role/project/project-fmp-eft-stepfunc-exec-role-${EnvName}
+# Mappings:
+#   dev:
+#     VPC: 
+#       ID: vpc-0a331ce9dbaa6c3bc
+#     # PublicSubnet1: 
+#     #   ID: subnet-0ea49413bb87d397f - VCPL:Development:AZ1:App:Private
+#     # PublicSubnet2: 
+#     #   ID: subnet-0da40fa91a69d8460 - VCPL:Development:AZ2:App:Private
+#     PrivateSubnet1: 
+#       ID: subnet-07f172ef1f06e8a6b
+#     PrivateSubnet2: 
+#       ID: subnet-027fb7a35bf53c204
+#     LambdaSecGroups: 
+#       ID: [sg-0ace1dad6a2b4509f]
+#     #   ID: [sg-002f8d9365aec748b, sg-012fc1283848837f7] - nsg-dev-state, vcpl-nsg-dev-dbclient
+#   # test:
+#   #   VPC: 
+#   #     ID: vpc-0190baf95160389a7
+#   #   PublicSubnet1: 
+#   #     ID: subnet-0b37e88b76f4d14b7
+#   #   PublicSubnet2: 
+#   #     ID: subnet-0ea19bd5578cd21fe
+#   #   PrivateSubnet1: 
+#   #     ID: subnet-0951f36167859bb6e
+#   #   PrivateSubnet2: 
+#   #     ID: subnet-0fb7f4665f939f17e
+#   #   LambdaSecGroups: 
+#   #     ID: [sg-0f1ee9c48781474be, sg-0a0c84b1100833d30]
+#   # preprod:
+#   #   VPC: 
+#   #     ID: vpc-0ebd287f7604e0101
+#   #   PrivateSubnet1: 
+#   #     ID: subnet-055cf4eb489e01ce3
+#   #   PrivateSubnet2: 
+#   #     ID: subnet-0b8b2deea1b889f4c
+#   #   PrivateNrSubnet1: 
+#   #     ID: subnet-08e7c33c4c0f416a9
+#   #   PrivateNrSubnet2: 
+#   #     ID: subnet-0c2abc2b60a0100c6
+#   #   LambdaSecGroups: 
+#   #     ID: [sg-04c6d3d280eb54343, sg-0dd34709f6c1f0089]
+#   # prod:
+#   #   VPC: 
+#   #     ID: vpc-06bee77bb68dc8d59
+#   #   PrivateSubnet1: 
+#   #     ID: subnet-02e64bd58daa2fafd
+#   #   PrivateSubnet2: 
+#   #     ID: subnet-010136ce03686d0ab
+#   #   PrivateNrSubnet1: 
+#   #     ID: subnet-0839062ccdf4d6b03
+#   #   PrivateNrSubnet2: 
+#   #     ID: subnet-0514d6bea42732e24
+#   #   LambdaSecGroups: 
+#   #     ID: [sg-05e4d322cf79cda83]
+
+Resources:
+  StepFuncExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub project-fmp-eft-stepfunc-exec-role-${EnvName}
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+        Version: "2012-10-17"
+      Path: /project/
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vaec/project-admin
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action: lambda:InvokeFunction
+                Effect: Allow
+                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:project-fmp-eft-*
+            Version: "2012-10-17"
+          PolicyName: project-fmp-eft-sf-invoke-lambda
+        - PolicyDocument:
+            Statement:
+              - Action: states:StartExecution
+                Effect: Allow
+                Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:*
+            Version: "2012-10-17"
+          PolicyName: project-fmp-eft-sf-exec-sf
+  LambdaExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: '2012-10-17'
+      Path: /project/
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vaec/project-admin
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - s3-object-lambda:*
+                  - s3:*
+                Effect: Allow
+                Resource: !Sub arn:${AWS::Partition}:s3:::*
+            Version: "2012-10-17"
+          PolicyName: s3
+        - PolicyDocument:
+            Statement:
+              - Action: logs:CreateLogGroup
+                Effect: Allow
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: !Sub
+                  - arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*
+                  - Suffix: !Ref EnvName
+            Version: "2012-10-17"
+          PolicyName: logs
+        # - PolicyDocument:
+        #     Statement:
+        #       - Action: secretsmanager:GetSecretValue
+        #         Effect: Allow
+        #         Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:fmp-eft/${EnvName}/*
+        #     Version: "2012-10-17"  
+        #   PolicyName: secrets
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DescribeInstances
+                  - ec2:AttachNetworkInterface
+                Effect: Allow
+                Resource: '*'
+            Version: "2012-10-17"
+          PolicyName: vpc
+        - PolicyDocument:
+            Statement:
+              - Action: states:StartExecution
+                Effect: Allow
+                Resource: !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:*
+            Version: "2012-10-17"
+          PolicyName: stepfunctions
+      RoleName: !Sub project-fmp-eft-s3-event-monitor-exec-role-${EnvName}
+  # PermissionToInvokeLambdaS3EventMonitor:
+  #   Type: AWS::Lambda::Permission 
+  #   Properties:
+  #     Action: lambda:InvokeFunction
+  #     FunctionName: !Ref LambdaS3EventMonitor
+  #     Principal: s3.amazonaws.com
+  #     SourceArn: !Sub arn:${AWS::Partition}:s3:::project-fmp-eft-inbound-${EnvName}
+  S3ArchiveBucket:
+    Type: AWS::S3::Bucket
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: Private
+      BucketName: !Sub project-fmp-eft-archive-${EnvName}
+      LifecycleConfiguration:
+        Rules:
+          - AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+            Status: Enabled
+          - ExpirationInDays: 90
+            Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+  S3IncomingBucket:
+    Type: AWS::S3::Bucket
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    DependsOn: [PermissionToInvokeLambdaS3EventMonitor]
+    Properties:
+      AccessControl: Private
+      BucketName: !Sub project-fmp-eft-inbound-${EnvName}
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Function: !GetAtt LambdaS3EventMonitor.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: tofms/manifest/
+          - Event: 's3:ObjectCreated:*'
+            Function: !GetAtt LambdaS3EventMonitor.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: fromfms/payinfo/
+      LifecycleConfiguration:
+        Rules:
+          - AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+            Status: Enabled
+      VersioningConfiguration:
+        Status: Enabled
+  S3OutgoingBucket:
+    Type: AWS::S3::Bucket
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: Private
+      BucketName: !Sub project-fmp-eft-out-${EnvName}
+      LifecycleConfiguration:
+        Rules:
+          - AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+            Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+  # LayerLibrary:
+  #   Type: AWS::Lambda::LayerVersion
+  #   Properties:
+  #     LayerName: !Sub project-fmp-eft-layer-etl-${EnvName}
+  #     Content:
+  #       S3Bucket: !Ref DevOpsBucketName
+  #       S3Key: !Sub assets/${CommitHash}/base/layer-etl.zip
+  #     CompatibleRuntimes: [nodejs18.x]
+  # LambdaS3EventMonitor:
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     FunctionName: !Sub project-fmp-eft-s3-event-monitor-${EnvName}
+  #     Handler: index.handler
+  #     Layers: [!Ref LayerLibrary]
+  #     MemorySize: 128
+  #     EphemeralStorage:
+  #       Size: 512
+  #     Runtime: nodejs18.x
+  #     Environment:
+  #       Variables:
+  #         ENV_NAME: !Ref EnvName
+  #         WAIT_FOR_STEPS: 30
+  #     Timeout: 180
+  #     Code:
+  #       S3Bucket: !Ref DevOpsBucketName
+  #       S3Key: !Sub assets/${CommitHash}/in-monitor-created/lambda-process.zip
+  # #    Role: !GetAtt LambdaExecRole.Arn
+  #     Role: !Sub arn:aws-us-gov:iam::${AWS::AccountId}:role/project/project-fmp-eft-s3-event-monitor-exec-role-${EnvName}
+  # # LambdaArchiveFile:
+  # #   Type: AWS::Lambda::Function
+  # #   Properties:
+  # #     Code:
+  # #       S3Bucket: !Ref DevOpsBucketName
+  # #       S3Key: !Sub assets/${CommitHash}/base/lambda-archive-file.zip
+  # #     Role: !GetAtt LambdaExecRole.Arn
+  # #     Environment:
+  # #       Variables:
+  # #         ARCHIVE_BUCKET: !Ref S3ArchiveBucket
+  # #         ENV_NAME: !Ref EnvName
+  # #     EphemeralStorage:
+  # #       Size: 512
+  # #     FunctionName: !Sub project-fmp-eft-archive-file-${EnvName}
+  # #     Handler: index.handler
+  # #     Layers: [!Ref LayerLibrary]
+  # #     MemorySize: 128
+  # #     Runtime: nodejs18.x
+  # #     Timeout: 180
+  # #     VpcConfig:
+  # #       SubnetIds: [!FindInMap [!Ref EnvName, PrivateSubnet1, ID], !FindInMap [!Ref EnvName, PrivateSubnet2, ID]]  
+  # #       SecurityGroupIds: !FindInMap [!Ref EnvName, LambdaSecGroups, ID] 
+  
+  # InSummarizeVtext:
+  #   Type: AWS::CloudFormation::Stack
+  #   Properties:
+  #     TemplateURL: !Sub https://${DevOpsBucketName}.s3-us-gov-west-1.amazonaws.com/cf-templates/${CommitHash}/pipeline.yaml
+  #     Parameters:
+  #       DevOpsBucketName: !Ref DevOpsBucketName
+  #       EnvName: !Ref EnvName
+  #       CommitHash: !Ref CommitHash
+  #       PipelineName: in-summarize-vtext
+  #       StepFuncTemplate: basic-in.json
+  #       StepFuncExecRoleArn: !Ref StepFuncExecRole
+  #       LambdaExecRoleArn: !Ref LambdaExecRole
+  #       LambdaLayerArn: !Ref LayerLibrary
+ 
+  # InSummarizeCalm:
+  #   Type: AWS::CloudFormation::Stack
+  #   Properties:
+  #     TemplateURL: !Sub https://${DevOpsBucketName}.s3-us-gov-west-1.amazonaws.com/cf-templates/${CommitHash}/pipeline.yaml
+  #     Parameters:
+  #       DevOpsBucketName: !Ref DevOpsBucketName
+  #       EnvName: !Ref EnvName
+  #       CommitHash: !Ref CommitHash
+  #       PipelineName: in-summarize-calm
+  #       StepFuncTemplate: basic-in.json
+  #       StepFuncExecRoleArn: !GetAtt StepFuncExecRole
+  #       LambdaExecRoleArn: !GetAtt LambdaExecRole
+  #       LambdaLayerArn: !Ref LayerLibrary
+ 
